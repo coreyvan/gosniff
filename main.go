@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -12,6 +15,21 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 )
+
+var (
+	apiKey = os.Getenv("IP_API_KEY")
+)
+
+// IPDetails contain details about the IP addr
+type IPDetails struct {
+	IP           net.IP `json:"ip"`
+	Country      string `json:"country_name"`
+	Continent    string `json:"continent_name"`
+	State        string `json:"state_prov"`
+	City         string `json:"city"`
+	ISP          string `json:"isp"`
+	Organization string `json:"organization"`
+}
 
 // getIPAddr uses shell commands to get the IP address of a device
 func getIPv4Addr() (net.IP, error) {
@@ -27,7 +45,7 @@ func getIPv4Addr() (net.IP, error) {
 }
 
 // listenIncoming listens for incoming packets and prints out IPv4 Layer data
-func listenIncoming(iface string, ip net.IP) {
+func listenIncoming(iface string, ip net.IP, count int) {
 	var handle *pcap.Handle
 	var err error
 
@@ -38,25 +56,46 @@ func listenIncoming(iface string, ip net.IP) {
 
 	// create a packet source to listen to handle
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	for packet := range packetSource.Packets() {
+	i := 0
+	for i < count {
+		var packet gopacket.Packet
+		packet = <-packetSource.Packets()
+		// handle packet and look up destination iP information
 		if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
 			ipv4 := ipv4Layer.(*layers.IPv4)
-
+			//TODO: Figure out how to exclude packets from private network 192.168*, etc.
 			if ipv4.DstIP.Equal(ip) {
-				srcIP := ipv4.SrcIP.String()
-
-				hostName, err := net.LookupAddr(srcIP)
+				ipdetails, err := getIPDetails(ipv4.SrcIP)
 				if err != nil {
-					log.Printf("Could not lookup addr %s: %v", srcIP, err)
+					log.Printf("Could not retrieve IP addr details for %s: %v", ipv4.SrcIP, err)
 					continue
 				}
-				fmt.Printf("Received packet from %s\n", hostName)
+				i++
+				fmt.Println(ipdetails)
 			}
 		}
 	}
 }
 
+func getIPDetails(ip net.IP) (IPDetails, error) {
+	var ipdetail IPDetails
+	url := fmt.Sprintf("https://api.ipgeolocation.io/ipgeo?apiKey=%s&fields=continent_name,country_name,state_prov,city,isp,organization&ip=%s", apiKey, ip.String())
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("error calling API %s: %v\n", url, err)
+		return ipdetail, err
+	}
+	// marshall json response into ipdetails struct
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("error reading response body: %v", err)
+	}
+	err = json.Unmarshal(body, &ipdetail)
+
+	return ipdetail, nil
+}
 func main() {
+	log.Printf("Started listening, api key = %v", apiKey)
 	localIP, err := getIPv4Addr()
 	if err != nil {
 		log.Fatalf("Could not get ip addr: %v", err)
@@ -64,5 +103,5 @@ func main() {
 
 	netInterface := os.Args[1]
 	// listen for incoming packets until the program is interrupted
-	listenIncoming(netInterface, localIP)
+	listenIncoming(netInterface, localIP, 10)
 }
