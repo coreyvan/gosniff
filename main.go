@@ -81,8 +81,8 @@ func listenIncoming(iface string, ip net.IP, count int) {
 func getIPDetails(ip net.IP, known map[string]IPDetails) (IPDetails, error) {
 	var ipdetail IPDetails
 
+	// if the details have already been stored, return them right away
 	if ipdetail, ok := known[ip.String()]; ok {
-		log.Printf("IP details found, not calling API")
 		return ipdetail, nil
 	}
 	url := fmt.Sprintf("https://api.ipgeolocation.io/ipgeo?apiKey=%s&fields=continent_name,country_name,state_prov,city,isp,organization&ip=%s", apiKey, ip.String())
@@ -118,7 +118,12 @@ func handlePacket(p gopacket.Packet, k map[string]IPDetails) error {
 	if ipv4Layer := p.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
 		ipv4 := ipv4Layer.(*layers.IPv4)
 		//TODO: Figure out how to exclude packets from private network 192.168*, etc.
+
 		if ipv4.DstIP.Equal(ip) {
+			if isPrivate(ipv4.SrcIP) {
+				// log.Printf("%s is private, moving on", ipv4.SrcIP)
+				return nil
+			}
 			ipdetails, err := getIPDetails(ipv4.SrcIP, k)
 			if err != nil {
 				log.Printf("Could not retrieve IP addr details for %s: %v", ipv4.SrcIP, err)
@@ -130,6 +135,23 @@ func handlePacket(p gopacket.Packet, k map[string]IPDetails) error {
 	return nil
 }
 
+func isPrivate(ip net.IP) bool {
+	private := false
+
+	privateRanges := []string{
+		"172.16.0.0/12",
+		"10.0.0.0/8",
+		"192.168.0.0/16",
+	}
+	for _, cidr := range privateRanges {
+		_, subnet, _ := net.ParseCIDR(cidr)
+		if subnet.Contains(ip) {
+			private = true
+		}
+	}
+	return private
+}
+
 func main() {
 	localIP, err := getIPv4Addr()
 	log.Printf("Started listener, local ip is %v", localIP)
@@ -139,5 +161,5 @@ func main() {
 
 	netInterface := os.Args[1]
 	// listen for incoming packets until the program is interrupted
-	listenIncoming(netInterface, localIP, 50)
+	listenIncoming(netInterface, localIP, 200)
 }
