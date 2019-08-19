@@ -8,8 +8,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
-	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -33,15 +31,23 @@ type IPDetails struct {
 
 // getIPAddr uses shell commands to get the IP address of a device
 func getIPv4Addr() (net.IP, error) {
-	// TODO This works but only gets one IPv4 addr that isn't 127.0.0.1
-	// this seems really fragile and bug prone
-	cmd := "ifconfig | grep \"inet \" | grep -v 127.0.0.1 | cut -d\\  -f2"
-	out, err := exec.Command("bash", "-c", cmd).Output()
+	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		return nil, fmt.Errorf("Cannot run bash command: %v - %v", cmd, err)
+		log.Panicln("Could not get interface addrs")
 	}
 
-	return net.ParseIP(strings.TrimSpace(string(out))), nil
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			v4 := ipnet.IP.To4()
+			// skip ip6 and loopback addr
+			if v4 == nil || v4[0] == 127 {
+				continue
+			}
+			return v4, nil
+		}
+
+	}
+	return nil, fmt.Errorf("Could not find local IP address")
 }
 
 // listenIncoming listens for incoming packets and prints out IPv4 Layer data
@@ -87,6 +93,7 @@ func getIPDetails(ip net.IP) (IPDetails, error) {
 	return ipdetail, nil
 }
 
+// handlePacket gets IP details for the sender of the packet
 func handlePacket(p gopacket.Packet) error {
 	ip, err := getIPv4Addr()
 	if err != nil {
@@ -110,10 +117,10 @@ func handlePacket(p gopacket.Packet) error {
 }
 
 func main() {
-	log.Printf("Started listening, api key = %v", apiKey)
 	localIP, err := getIPv4Addr()
+	log.Printf("Started listener, local ip is %v", localIP)
 	if err != nil {
-		log.Fatalf("Could not get ip addr: %v", err)
+		log.Fatalf("Could not get local ip address: %v", err)
 	}
 
 	netInterface := os.Args[1]
