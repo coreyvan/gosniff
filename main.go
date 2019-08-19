@@ -61,19 +61,11 @@ func listenIncoming(iface string, ip net.IP, count int) {
 		var packet gopacket.Packet
 		packet = <-packetSource.Packets()
 		// handle packet and look up destination iP information
-		if ipv4Layer := packet.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
-			ipv4 := ipv4Layer.(*layers.IPv4)
-			//TODO: Figure out how to exclude packets from private network 192.168*, etc.
-			if ipv4.DstIP.Equal(ip) {
-				ipdetails, err := getIPDetails(ipv4.SrcIP)
-				if err != nil {
-					log.Printf("Could not retrieve IP addr details for %s: %v", ipv4.SrcIP, err)
-					continue
-				}
-				i++
-				fmt.Println(ipdetails)
-			}
+		err = handlePacket(packet)
+		if err != nil {
+			log.Printf("Could not handle packet: %v", err)
 		}
+		i++
 	}
 }
 
@@ -94,6 +86,29 @@ func getIPDetails(ip net.IP) (IPDetails, error) {
 
 	return ipdetail, nil
 }
+
+func handlePacket(p gopacket.Packet) error {
+	ip, err := getIPv4Addr()
+	if err != nil {
+		log.Printf("Could not retrieve local IP addr: %v", err)
+		return err
+	}
+	log.Printf("Handling packet, ip is %v\n", ip)
+	if ipv4Layer := p.Layer(layers.LayerTypeIPv4); ipv4Layer != nil {
+		ipv4 := ipv4Layer.(*layers.IPv4)
+		//TODO: Figure out how to exclude packets from private network 192.168*, etc.
+		if ipv4.DstIP.Equal(ip) {
+			ipdetails, err := getIPDetails(ipv4.SrcIP)
+			if err != nil {
+				log.Printf("Could not retrieve IP addr details for %s: %v", ipv4.SrcIP, err)
+				return err
+			}
+			fmt.Println(ipdetails)
+		}
+	}
+	return nil
+}
+
 func main() {
 	log.Printf("Started listening, api key = %v", apiKey)
 	localIP, err := getIPv4Addr()
